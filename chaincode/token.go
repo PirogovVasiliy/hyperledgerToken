@@ -1,6 +1,7 @@
 package chaincode
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -15,10 +16,9 @@ type SmartContract struct {
 const nameKey = "name"
 const symbolKey = "symbol"
 
-type event struct {
-	ChainID int    `json:"chain_id"`
-	To      string `json:"to"`
-	Value   string `json:"value"`
+type eventSentToBridge struct {
+	To    string `json:"to"`
+	Value string `json:"value"`
 }
 
 func (s *SmartContract) Initialize(ctx contractapi.TransactionContextInterface, name string, symbol string) (bool, error) {
@@ -62,7 +62,7 @@ func (s *SmartContract) Mint(ctx contractapi.TransactionContextInterface, amount
 	amount := big.NewInt(0)
 	amount.SetString(amountStr, 10)
 
-	if amount.Cmp(big.NewInt(0)) <= 0 {
+	if amount.Cmp(big.NewInt(0)) < 0 {
 		return errors.New("mint amount must be a positive integer")
 	}
 
@@ -132,6 +132,52 @@ func (s *SmartContract) Burn(ctx contractapi.TransactionContextInterface, amount
 	return nil
 }
 
+func (s *SmartContract) Transfer(ctx contractapi.TransactionContextInterface, recipient string, amountStr string) error {
+
+	initialized, err := checkInitialized(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to check if contract is already initialized: %v", err)
+	}
+	if !initialized {
+		return fmt.Errorf("contract options need to be set before calling any function, call Initialize() to initialize contract")
+	}
+
+	clientID, err := ctx.GetClientIdentity().GetID()
+	if err != nil {
+		return fmt.Errorf("failed to get client id: %v", err)
+	}
+
+	err = transferHelper(ctx, clientID, recipient, amountStr)
+	if err != nil {
+		return fmt.Errorf("failed to transfer: %v", err)
+	}
+
+	return nil
+}
+
+func (s *SmartContract) SendTokensToBridge(ctx contractapi.TransactionContextInterface, recipient string, amountStr string) error {
+	initialized, err := checkInitialized(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to check if contract is already initialized: %v", err)
+	}
+	if !initialized {
+		return fmt.Errorf("contract options need to be set before calling any function, call Initialize() to initialize contract")
+	}
+
+	err = s.Burn(ctx, amountStr)
+	if err != nil {
+		return err
+	}
+
+	event := eventSentToBridge{recipient, amountStr}
+	eventJSON, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	err = ctx.GetStub().SetEvent("SendTokensToBridge", eventJSON)
+	return err
+}
+
 func (s *SmartContract) ClientAccountBalance(ctx contractapi.TransactionContextInterface) (string, error) {
 
 	initialized, err := checkInitialized(ctx)
@@ -158,29 +204,6 @@ func (s *SmartContract) ClientAccountBalance(ctx contractapi.TransactionContextI
 	balance := string(balanceBytes)
 
 	return balance, nil
-}
-
-func (s *SmartContract) Transfer(ctx contractapi.TransactionContextInterface, recipient string, amountStr string) error {
-
-	initialized, err := checkInitialized(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to check if contract is already initialized: %v", err)
-	}
-	if !initialized {
-		return fmt.Errorf("contract options need to be set before calling any function, call Initialize() to initialize contract")
-	}
-
-	clientID, err := ctx.GetClientIdentity().GetID()
-	if err != nil {
-		return fmt.Errorf("failed to get client id: %v", err)
-	}
-
-	err = transferHelper(ctx, clientID, recipient, amountStr)
-	if err != nil {
-		return fmt.Errorf("failed to transfer: %v", err)
-	}
-
-	return nil
 }
 
 func (s *SmartContract) ClientAccountID(ctx contractapi.TransactionContextInterface) (string, error) {
